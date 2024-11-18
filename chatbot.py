@@ -5,13 +5,13 @@ from langchain_ollama import ChatOllama
 from langchain_core.output_parsers.string import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
-from langchain_community.document_loaders import WebBaseLoader
+from langchain_community.document_loaders import SeleniumURLLoader
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 async def load_documents(urls: list[str]) -> list[str]:
-  loader: WebBaseLoader = WebBaseLoader(web_paths=urls)
+  loader: SeleniumURLLoader = SeleniumURLLoader(urls=urls)
   docs: list[Document] = []
 
   async for doc in loader.alazy_load():
@@ -30,12 +30,32 @@ async def docs_to_clean_string(docs: list[Document]) -> str:
 
   return docString
 
-async def split_str(string: str) -> str:
-  text_splitter: RecursiveCharacterTextSplitter = RecursiveCharacterTextSplitter()
+def remove_redundant_text(text: str) -> str:
+  """
+  Removes exact duplicate sentences from the input text.
+    :param text: The input text to deduplicate.
+    :return: Cleaned text with duplicate sentences removed.
+  """
 
-  string = text_splitter.split_text(string)
+  # Split the text into sentences (or paragraphs)
+  sentences = text.split('\n')
 
-  return string
+  # Remove duplicates by converting the list of sentences to a set
+  unique_sentences = list(set(sentences))
+
+  # Join the unique sentences back into a string
+  return "\n".join(unique_sentences)
+
+
+async def split_str(string: str) -> list[str]:
+  text_splitter: RecursiveCharacterTextSplitter = RecursiveCharacterTextSplitter(
+    chunk_size=1000,
+    chunk_overlap=200
+  )
+
+  chunks = text_splitter.split_text(string)
+
+  return chunks
 
 async def main():
   load_dotenv()
@@ -49,32 +69,23 @@ async def main():
     temperature=0
   )
 
-  docs = await split_str(await docs_to_clean_string(await load_documents(PATHS)))
+  embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+  vector_store = Chroma(
+      embedding_function=embeddings,
+      persist_directory="./chroma_langchain_db",  # Where to save data locally, remove if not necessary
+  )
 
-  print(docs)
+  docs: list[str] = await split_str(remove_redundant_text(await docs_to_clean_string(await load_documents(PATHS))))
+  metadata = [{"id": str(uuid4()), "source": "document1", "chunk": i} for i in range(len(docs))]
+  print(f"Total documents in vector store: {len(docs)}")
 
-# embeddings_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+  await vector_store.aadd_texts(docs, metadatas=metadata)
 
-# embeddings = embeddings_model.embed_documents(docs_text)
-
-# vector_store = Chroma(
-#     persist_directory="./chroma_langchain_db",  # Where to save data locally, remove if not necessary
-# )
-
-# uuids = [str(uuid4()) for _ in range(len(docs_text))]
-
-# vector_store.add_documents(documents=docs_text, ids=uuids)
-
-# print(vector_store.get())
-
-# prompt = ChatPromptTemplate.from_messages(
-#   [
-#     ('system', 'you like to use emojis'),
-#     ('human', '{input}')
-#   ]
-# )
-
-# chain = prompt | chatbot | StrOutputParser()
+  results = vector_store.similarity_search_by_vector(
+    embedding=embeddings.embed_query("Overcome"), k=2
+  )
+  for doc in results:
+    print(f"* {doc.page_content} [{doc.metadata}]")
 
 # print(chain.invoke({'input': 'what is promptior'}))
 
