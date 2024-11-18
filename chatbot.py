@@ -1,25 +1,26 @@
-import os, json, re, bs4, asyncio
+import os, json, re, asyncio
 from uuid import uuid4
 from dotenv import load_dotenv
 from langchain_ollama import ChatOllama
 from langchain_core.output_parsers.string import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.documents import Document
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
-import chromadb
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 async def load_documents(urls: list[str]) -> list[str]:
   loader: WebBaseLoader = WebBaseLoader(web_paths=urls)
-  docs: list[str] = []
+  docs: list[Document] = []
 
   async for doc in loader.alazy_load():
     docs.append(doc)
 
   return docs
 
-async def docs_to_clean_string(docs: list[str]) -> str:
-  docString = ""
+async def docs_to_clean_string(docs: list[Document]) -> str:
+  docString: str = ""
 
   RE_CLEANUP_NEWLINES: re.Pattern[str] = re.compile(r"(?<=[a-zA-Z])\n(?=[a-zA-Z])|\n{2,}")
 
@@ -29,20 +30,26 @@ async def docs_to_clean_string(docs: list[str]) -> str:
 
   return docString
 
+async def split_str(string: str) -> str:
+  text_splitter: RecursiveCharacterTextSplitter = RecursiveCharacterTextSplitter()
+
+  string = text_splitter.split_text(string)
+
+  return string
+
 async def main():
   load_dotenv()
 
-  LANGCHAIN_API_KEY = os.environ['LANGCHAIN_API_KEY']
-  LANGCHAIN_TRACING_V2 = os.environ['LANGCHAIN_TRACING_V2']
-  PATHS = json.loads(os.environ['PATHS'])
+  LANGCHAIN_API_KEY: str = os.environ['LANGCHAIN_API_KEY']
+  LANGCHAIN_TRACING_V2: str = os.environ['LANGCHAIN_TRACING_V2']
+  PATHS: list[str] = json.loads(os.environ['PATHS'])
 
   chatbot = ChatOllama(
     model='llama2',
     temperature=0
   )
 
-  docs = await load_documents(PATHS)
-  docs = await docs_to_clean_string(docs)
+  docs = await split_str(await docs_to_clean_string(await load_documents(PATHS)))
 
   print(docs)
 
